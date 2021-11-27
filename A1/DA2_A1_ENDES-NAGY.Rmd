@@ -1,6 +1,6 @@
 ---
 title: "Report on gender wage gap in legal jobs"
-author: 'Endes-Nagy Péter'
+author: 'Péter ENDES-NAGY'
 output: 
   pdf_document:
     extra_dependencies: ["float"]
@@ -50,26 +50,37 @@ P95 <- function(x){quantile(x,0.95,na.rm=T)}
 P05 <- function(x){quantile(x,0.05,na.rm=T)}
 Range <- function(x){max(x,na.rm=T)-min(x,na.rm=T)}
 
+#theme for plots
+theme_ass <- function( base_size = 11) {
+    theme(
+    panel.background = element_rect( fill = 'white' ) ,
+    panel.grid.major = element_line( size = 0.1, linetype = 'solid',
+                                     colour = 'azure3') ,
+    panel.grid.minor = element_line( size = 0.1, linetype = 'dotted',
+                                     colour = 'azure4') ,
+    plot.subtitle = element_text( (size = base_size - 2) ) )
+}
+
 ```
 
 ## Introduction
 
-This is a report on *gender wage gap in legal jobs*. 
-
-HERE COMES THE MOTIVATION WHY THIS IS A MEANINGFUL PROJECT AND WHAT IS THE MAIN GOAL!
-
-For more details on the project see: <http://www.thebillionpricesproject.com/>.
+This is a report on *gender wage gap in legal jobs*. I investigated the magnitude of the gender wage gap in legal occupations and how other features, like occupation, level of education and age influences the wage gap. 
 
 ## Data
 
+I used data from the 2014's Current Population Survey (CPS), that is a monthly survey of about 60,000 households in the US. A detailed description of the Survey and the methodology is available here: <https://osf.io/uqe8z/>  
 
+I was interested in gender wage gap in legal occupations, so I narrowed down my sample to this field, using `2100` (Lawyers, Judges, magistrates, and other judicial workers), `2105` (Judicial law clerks), `2145` (Paralegals and legal assistant) and `2160` (Miscellaneous legal support workers) census codes. It seems that there is a hierarchy among these occupations, the `2105`-`2145`-`2160` occupations have a rather supporting role, so I created an `occupation` variable that takes 1 for `2100` and 0 for the rest.  
 
-HERE COMES A DETAILLED EXPLANATION ABOUT WHERE THE DATA COMES FROM AND IF IT IS REPRESENTATIVE OR NOT.
+The legal field requires a degree, especially the `2100` occupations (at least a Professional degree), so the level of education was also filtered for Bachelor's degree and above. 
 
-Our main interest is whether online prices are lower or higher than simple retail store prices. We investigated the data on the collected prices and we have the following descriptive statistics on online, in-store prices and in their differences.
+During the preparation phase, hourly wages were also constructed for the sake of comparability, as well as the log hourly wage.  
+
+First, I investigated the descriptive statistics of the key variables:
 
 ```{r descriptives, echo=FALSE}
-datasummary( (`wage` = w) + (`ln(wage)` = lnw) + age ~ 
+datasummary( (`wage` = w) + (`ln(wage)` = lnw) + age  ~ 
                Mean + SD + Median + Min + Max + Range + P05 + P95 + N , 
              data = df , 
              title = 'Descriptive statstics of hourly wages and age' , 
@@ -77,11 +88,9 @@ datasummary( (`wage` = w) + (`ln(wage)` = lnw) + age ~
   kableExtra::kable_styling(latex_options = "hold_position")
 ```
 
-The number of observations is `r length(df$age)` for all of our key variables.
+The number of observations is `r length(df$age)` for all of our key variables. The mean and median of the hourly wage are surprisingly close to each other which usually isn't the case since the wage follows lognormal distribution.   
 
-DESCRIPTION OF THE SUMMARY STATS: WHAT CAN WE LEARN FROM THEM?
-
-As the focus is the price difference, the next Figure shows the histogram for this variable.
+To further investigate the distribution of wages, the next figure shows the violin plots of hourly wages by gender.
 
 ```{r, echo=FALSE, warning=FALSE, fig.width=4, fig.height = 3, fig.align="center" }
 
@@ -96,16 +105,14 @@ ggplot( data = df , aes( x = female, y = w )) +
         title = 'Hourly wages in legal jobs, by sex' ,
         caption = 'data from: https://osf.io/4ay9x') +
   stat_summary(fun = mean, geom = 'point') +
-  theme(
-    panel.background = element_rect( fill = 'white' ) ,
-    panel.grid.major = element_line( size = 0.1, linetype = 'solid',
-                                     colour = 'azure3') ,
-    panel.grid.minor = element_line( size = 0.1, linetype = 'dotted',
-                                     colour = 'azure4') ,
-    plot.subtitle = element_text( size = 10 ) )
+  theme_ass()
 
 ```
+The wage distribution of women follows lognormal distribution as expected. Among men, there is a disruption in the distribution, most men earn around 50 USD/hour, while another large group earns around 25 USD/hour. It is also interesting that extreme values can be observed among women only.  
 
+This odd looking distribution may raise some concerns about the log transformation of wages, but as we look at the women's wages, we are still better off with log.  
+
+As I'm planning to use age in the models, the next Figure displays the relationship between hourly wages and age. 
 
 ```{r, echo=FALSE, warning=FALSE, fig.width=4, fig.height = 3, fig.align="center" }
 
@@ -118,23 +125,17 @@ ggplot( data = df , aes( x = age, y = lnw )) +
         title = 'Hourly log wages in legal jobs, by age' ,
         caption = 'data from: https://osf.io/4ay9x') +
   scale_x_continuous(breaks = seq(15,65,by=5)) +
-  theme(
-    panel.background = element_rect( fill = 'white' ) ,
-    panel.grid.major = element_line( size = 0.1, linetype = 'solid',
-                                     colour = 'azure3') ,
-    panel.grid.minor = element_line( size = 0.1, linetype = 'dotted',
-                                     colour = 'azure4') ,
-    plot.subtitle = element_text( size = 10 ) )
+ theme_ass()
 
 ```
+The relationship clearly isn't linear. It flattens around 35 years, so using a spline is recommended in the model. The figure also draws our attention to another interesting feature of the sample: the wages seem to be capped! Most probably because a large share of respondents are employed by the public sector, so their hourly wages are defined by pay scales. 
 
 
-DESCRIPTION OF THE FIGURE. WHAT DOES IT TELS US?
+## Modelling gender wage gap
 
-(May change the order of descriptive stats and graph.)
+For modeling the wage gap, I run 4 log-level regressions: 1) gender 2) gender and occupation 3) gender, occupation and level of education 4) gender, occupation, level of education and age (spline).  
 
-## Testing Price Differences
-
+The following table shows the Models's results: 
 
 ```{r, echo = FALSE }
 #REGRESSION MODELS
@@ -159,20 +160,16 @@ msummary( list( reg1 , reg2 , reg3 , reg4 ) ,
 
 ```
 
-We test the hypothesis, whether the price difference is zero, therefore there is no difference between retail and online prices:
+The first model shows the unconditional gender gap. Men earn `r round(exp(coef(reg1)[1]))` USD/h on average, while women earn `r round(coef(reg1)[2]*100)`% less on average. The Model isn't too strong, gender only explains `r summary(reg1)$r.squared*100`% of variation in log wages. 
 
+Including occupation, the model becomes stronger, explaining already `r summary(reg2)$r.squared*100`% of variation in log hourly wages. It lowers the effect of gender on hourly wages, woman working in supporting legal occupations earn `r round(coef(reg2)[3]*100)`% less on average compared to man in same occupation. Man working as lawyers, judges, magistrates or as other juridical workers earn `r round(coef(reg2)[2]*100)`% more on average. It implies that woman are likely concentrated in these supporting jobs.  
 
-$$H_A:=\text{price online} - \text{price retail} \neq 0$$
+By including level of education, the model becomes slightly stronger. The gender gap remains relatively the same, the level of education takes over occupation - not that suprising, since given degrees are necessary for certain occupations in the legal field - but occupation remains significant. Compared to Bachelor's degree holder man working in supporting jobs, Master's degree yields `r round(coef(reg3)[4]*100)`% higher hourly wage in average, Professional degree holders earn 
+`r round(coef(reg3)[5]*100)`% more and PhD holders have `r round(coef(reg3)[6]*100)`% higher wage on average.  
 
+As we saw on Figure 2, the relationship between age and hourly wage isn't linear, a spline at age of 35 is recommended to be introduced in Model 4. It makes our model stronger, the model explains `r summary(reg4)$r.squared*100`% of variation in log hourly wages. As expected based on Figure 2, age loses it's importance after 35, the coefficient isn't significant nor at 99% nor at 95%. The other variables' coefficients remain relatively the same - except for Master's Degree that loses it's significance at 99%.  
 
-
-## Robustness check / 'Heterogeneity analysis'
-
-Task: calculate and report t-tests for each countries. 
-
-You should report: Country, mean of p_diff, se of the mean for p_diff, number of observations in each country, t-statistic, p-value.
-
-Hint: use 'kable()' and to hold the table position you can define the following argument: 'position = "H"' . Take care of caption, number of digits you use and the name of variables you report! You may check how the output changes if you use 'booktabs = TRUE' input for kable!
+The next Figure shows the fitness of our best Model 4:
 
 ```{r, echo=FALSE, warning=FALSE, fig.width=4, fig.height = 3, fig.align="center" }
 
@@ -191,7 +188,7 @@ df$lnw_res4 <- df$lnw - df$lnw_hat4
 
 #plotting residuals and predicted values
 ggplot(df, aes( x = lnw_hat4 , y = lnw_res4 ) ) + 
-  geom_point( size = 0.2 ) +
+  geom_point( size = 0.5 ) +
   geom_smooth( method="lm", colour='blue', se=F , formula = y~x , size = .5) +
   labs( caption = 'data from: https://osf.io/4ay9x' ,
         x = 'ln(Predicted hourly wage)' , 
@@ -209,11 +206,11 @@ ggplot(df, aes( x = lnw_hat4 , y = lnw_res4 ) ) +
 
 
 ```
-
-Extra: In words, select those countries, where you can not reject the alternative that the prices are different. With the command '\textcolor{red}{this is red} you can highlight these countries!
-
+Since only the age is quasi-continous, the other variables are binary, the predicted values are more dense around given values. The distribution of residuals suggest that our model is more likely to preduct higher wages in some "extreme" cases - see 2 predicted hourly wages are more than -2 away from the actual value. 
 
 
 ## Conclusion
 
-HERE COMES WHAT WE HAVE LEARNED AND WHAT WOULD STRENGHTEN AND WEAKEN OUR ANALYSIS.
+In this report, I investigated the gender wage gap in legal occupations. I build 4 Models that included gender, occupation, level of education and age.  
+
+As I introduced more variables, the gender gap decreased, but it remained relatively stable and considerable: `r round(coef(reg1)[2]*100)`%, `r round(coef(reg2)[3]*100)`%,`r round(coef(reg3)[3]*100)`% and `r round(coef(reg4)[3]*100)`% respectively. All the other variables are positively and significantly associated with hourly wages. 
