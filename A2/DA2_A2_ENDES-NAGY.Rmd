@@ -1,0 +1,211 @@
+---
+title: "Report on hotel ratings in « Ville de Paris »"
+author: 'Péter ENDES-NAGY'
+output: 
+  pdf_document:
+    extra_dependencies: ["float"]
+---
+
+```{r setup, include = F, echo = F , warning = F , cache = T}
+knitr::opts_chunk$set(fig.pos = "!H", out.extra = "")
+options(tinytex.verbose = TRUE)
+#packages
+library(tidyverse)
+library(fixest)
+library(modelsummary)
+library(estimatr)
+library(lspline)
+library(mfx)
+
+#setting up base theme for charts
+theme_ass <- function( base_size = 11) {
+  theme(
+    panel.background = element_rect( fill = 'white' ) ,
+    panel.grid.major = element_line( size = 0.1, linetype = 'solid',
+                                     colour = 'azure3') ,
+    panel.grid.minor = element_line( size = 0.1, linetype = 'dotted',
+                                     colour = 'azure4') ,
+    plot.subtitle = element_text( (size = base_size - 2) ) ,
+    legend.position = 'none')
+}
+
+# custom functions for descriptive statistics
+P95 <- function(x){quantile(x,0.95,na.rm=T)}
+P05 <- function(x){quantile(x,0.05,na.rm=T)}
+Range <- function(x){max(x,na.rm=T)-min(x,na.rm=T)}
+
+#import full dataset
+hotel <- read_csv('https://osf.io/utwjs/download')
+
+#CLEANING AND FILTERING
+## Paris (actual, no banlieux), hotels only
+## missing: ratings, stars
+## distance looks suspicious since the full diameter of Ville de Paris is 6-7 miles, so we shouldn't see anything 3.5 miles further away. But the furthest hotels are in the Trocadéro area which is right in front of the Eiffel-tower on the rive droit, so something is oddly calculated upon the dataset's creation. Or maybe the data source took the whole 16th district as Trocadéro and some hotels around Porte Saint-Cloud are taking these high values.  
+## create rating binary: highly_rated=1 if rating ≥ 4, 0 otherwise
+hotels <- hotel %>% 
+  filter( city_actual == "Paris" ) %>% 
+  filter( accommodation_type == "Hotel" ) %>% 
+  filter( !is.na( stars ) ) %>% 
+  filter( !is.na( rating ) ) %>% 
+  mutate( highly_rated = ifelse( rating >= 4 , 1 , 0 ) )
+
+# create weights for inspecting relationship between high rating and distance/stars
+hotels <- hotels %>%
+  group_by( highly_rated , distance ) %>%
+  mutate(weight_dist = n()/10)
+
+hotels <- hotels %>%
+  group_by( highly_rated , stars ) %>%
+  mutate(weight_stars = n()/100)
+
+```
+
+
+## Introduction
+
+This is a report on *hotel ratings in City of Paris*. I investigated on the sample of Parisian hotels what factors influence the probability that a hotel is highly rated by their guests.  
+
+## Data
+
+I used the `hotels-europe` dataset that includes information on features of hotels in 46 European cities and for 10 different dates. A detailed description of the dataset is available here: <https://gabors-data-analysis.com/datasets/#hotels-europe>  
+
+I was interested in factors that influence hotel ratings, like distance and stars, therefore the `hotels-europe_features` table was used. As a first step, I filtered for actual Paris (no banlieux), Hotels only. Missing stars and distance data was also filetered out. A new `highly_rated` dummy variable was constructed that takes the value of 1 if rating is greater than 4, otherwise 0. This `highly_rated` is my dependent variable.  
+
+There are `r length(hotels$hotel_id)` Parisian hotels in the dataset, `r round( mean( hotels$highly_rated ) * 100 , 1 )`% of them are highly rated. Further descriptive statics on the key variables are available in `Table 1`.
+
+```{r descriptives, echo = F , warning = F , cache = T}
+# basic descriptive statistics on key variables
+datasummary( (`Highly rated` = highly_rated) + (`Distance (miles)` = distance) + (`Hotel stars` = stars) ~
+               Mean + SD + Median + Min + Max + Range + P05 + P95 + N , 
+             data = hotels , 
+             title = 'Descriptive statstics of Parisian hotels' , 
+             notes = 'data from: https://osf.io/utwjs') %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+Before building the models, I investigated the main characteristics of the relationships between high rating and the independent variables: distance and stars.  
+
+As the Figure 1 shows, the relationship between high rating and distance isn't linear, therefore using `lspline` is recommended with breakpoints at 1.25 and 2.75.  
+
+```{r distance_h_rating, echo = F , warning = F , cache = T , message = F , fig.width = 5.5, fig.height = 3, fig.align = "center" }
+
+# plotting distance and high rating to see if the relationship is linear
+
+ggplot( hotels , aes( x = distance , y = highly_rated ) ) +
+  geom_point( aes( x = distance , y = highly_rated, size = weight_dist , color = weight_dist ) ) +
+  geom_smooth( method = "loess" ) + 
+  scale_color_viridis_b( direction = -1 ) +
+  theme_ass() +
+  labs(
+    title = "High rating and distance from city center" ,
+    caption = 'Parisian hotels, data from: https://osf.io/utwjs' , 
+    x = 'Distance from city center (miles)' , 
+    y = 'Hotel highly rated (probability)'
+  ) +
+  ylim( 0 , 1 )
+
+```
+
+Hotel stars are rather ordinal variables than interval/ratio, since the distance between 2 and 3 stars isn't necessary the same as between 3 and 4. Plotting `highly_rated` against hotel stars implies that we can ease the strictness and use it as continuous variable. The relationship seems more or less linear. 
+ 
+```{r stars_h_rating, echo = F , warning = F , cache = T , message = F , fig.width = 5.5, fig.height = 3, fig.align = "center" }
+# plotting stars and high rating to see if the relationship is linear + shall we treat it as a ratio or ordinal variable
+ggplot( hotels , aes( x = stars , y = highly_rated ) ) +
+  geom_point( aes( x = stars , y = highly_rated, size = weight_dist , color = weight_stars ) ) +
+  geom_smooth( method = "loess" ) + 
+  scale_color_viridis_b( direction = -1 ) +
+  theme_ass() +
+  labs(
+    title = "High rating and stars" , 
+    caption = 'Parisian hotels, data from: https://osf.io/utwjs' , 
+    x = 'Number of stars' , 
+    y = 'Hotel highly rated (probability)'
+  ) +
+  ylim( 0 , 1 )
+
+```
+
+## Modelling likelihood of high rating
+
+For modeling the relationship between distance, stars and high rating, I run a simple LPM, a logit and probit regression. I also included results with and without using splines for distance. 
+
+```{r, echo = F , warning = F , cache = T , message = F }
+#linear model
+lpm <- lm( highly_rated ~ stars + distance , data=hotels )
+hotels$pred_lpm <- predict( lpm )
+
+#linear model with spline
+lpm2 <- lm( highly_rated ~ stars + lspline( distance , c(1.25,2.75)) , data=hotels )
+hotels$pred_lpm2 <- predict( lpm2 )
+
+# logit model
+logit <- glm( highly_rated ~ stars + distance , data=hotels , family='binomial' )
+hotels$pred_logit <- predict.glm( logit , type="response")
+
+logit_marg <- logitmfx( formula = highly_rated ~ stars + distance , data=hotels, atmean=FALSE)
+
+#logit model with spline
+logit2 <- glm( highly_rated ~ stars + lspline( distance , c(1.25,2.75)) , data=hotels , family='binomial' )
+hotels$pred_logit2 <- predict.glm( logit2 , type="response")
+
+logit_marg2 <- logitmfx( formula = highly_rated ~ stars + lspline( distance , c(1.25,2.75)) , data=hotels, atmean=FALSE)
+
+
+#probit model
+probit <- glm( highly_rated ~ stars + distance, data=hotels , family = binomial(link = "probit") )
+hotels$pred_probit <- predict.glm( probit , type="response")
+
+probit_marg <- probitmfx( formula = highly_rated ~ stars + distance , data=hotels, atmean=FALSE)
+
+
+#probit model with spline
+probit2 <- glm( highly_rated ~ stars + lspline( distance , c(1.25,2.75)) , data=hotels , family = binomial(link = "probit") )
+hotels$pred_probit2 <- predict.glm( probit2 , type="response")
+
+probit_marg2 <- probitmfx( formula = highly_rated ~ stars + lspline( distance , c(1.25,2.75)) , data=hotels, atmean=FALSE)
+
+```
+
+The regression results are available in `Table 2`: 
+
+```{r models, echo = F , warning = F , cache = T}
+#Model summaries
+msummary( list( `Linear` = lpm , `Linear (spline)` = lpm2 ,
+                `Logit` = logit_marg , `Logit (spline)` = logit_marg2 ,
+                `Probit` = probit_marg , `Probit (spline)` = probit_marg2) ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) , 
+         coef_rename = c(
+           "lspline(distance, c(1.25, 2.75))1" = "Distance < 1.25" , 
+           "lspline(distance, c(1.25, 2.75))2" = "Distance 1.25-2.75" ,
+           "lspline(distance, c(1.25, 2.75))3" = "Distance > 2.75"
+         ) ,
+         title = 'Probability of having a high rating among Parisian Hotels : Model summaries' , 
+         notes = 'data from: https://osf.io/utwjs'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+The coefficients (marginal in case of logit and probit since the raw coefficients can't be interpreted) are basically the same, so there is no difference in interpreting them. Each additional star means `r round( coef(lpm)[2]*100 , 1)`% points higher likeliness that a Parisian hotel has a high rating. Without use of splines, distance is significant on 5% only, a hotel a mile further away from the center is `r abs( round( coef(lpm)[3] * 100 , 1))`% points less likely to have a high rating. With splines, the distance doesn't seem to matter, none of the coefficients are significant at 5% - hotels with more stars are probably concentrated in the city center.  
+The difference between LPM, logit and probit models lie in the predicted values. Logit and probit keeps the predicted probabilities between 0 and 1, in our models [`r round( min( hotels$pred_probit2 ) , 2 ) ` , `r round( max( hotels$pred_probit2 ) , 2 )`] and [`r round( min( hotels$pred_logit2 ) , 2 ) ` , `r round( max( hotels$pred_logit2 ) , 2 )`] for probit and logit respectively, while in the LPM model, they range between `r round( min( hotels$pred_lpm2 ) , 2 ) ` and `r round( max( hotels$pred_lpm2 ) , 2 )`. 
+
+```{r predictions, echo = F , warning = F , cache = T , message = F , fig.width = 5.5, fig.height = 3, fig.align = "center"}
+ggplot(data = hotels) +
+  geom_point( aes( x=pred_lpm2 , y=pred_probit2 , color="Probit" ) , shape=16) +
+  geom_point( aes( x=pred_lpm2 , y=pred_logit2 ,  color="Logit" ) ,  shape=16) +
+  geom_point( aes( x=pred_lpm2 , y=pred_lpm2 , color="LPM" ) ) +
+  geom_line( aes( x=pred_lpm2 , y=pred_lpm2) , size=0.2 ) + 
+  theme_ass() +
+  theme(legend.position = 'right') +
+  scale_color_discrete( name = "Model type" ) +
+  labs(
+    title = "Comparing Models (with spline)",
+    x = 'Predicted probability of high rating (LPM)' , 
+    y = 'Predicted probability'
+  ) +
+  scale_y_continuous( breaks = seq( -0.25 , 1.25 , by = 0.25) ) +
+  scale_x_continuous( breaks = seq( -0.25 , 1.25 , by = 0.25) )
+```
+## Conclusion
+In this report, I investigated how distance from the city center and number of stars influence the likely-hood that a Parisian hotel has high rating, above 4. Based on my dataset, hotels with more stars are significantly more likely to have a high rating. Distance is insignificant in my model.  
+Generalizing the results on other cities shall be carried out carefully. Cities have different structures, the role of distance might vary greatly from one city to another - "better" hotels might be concentrated in different belts or areas. The insights on hotel stars might be generalized as they measure the quality and comfort level of given hotels based on international standards. 
