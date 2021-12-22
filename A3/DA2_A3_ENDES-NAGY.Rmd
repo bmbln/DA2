@@ -40,12 +40,12 @@ Range <- function(x){max(x,na.rm=T)-min(x,na.rm=T)}
 
 # Introduction
 
-This is a regression analysis on married woman of Europe in 2018. I'm investigating the effect of having a stay-at-home mom mother on the stay-at-home mom status of their children.    
-We learn a lot from our parents, the family role patterns have an influence on the adult behavior of the children. There is some sociological evidence, that gender roles (and attitudes towards them) are inherited through family role patterns as well. In this report, I'm examining whether the classical "woman doing housework, staying home with the children instead of working" phenomenon might be also influenced by family role patters.  
+This is a regression analysis on married woman of Europe in 2018. I'm investigating the effect of having a "stay-at-home mom" mother on the "stay-at-home mom" status of their children.    
+We learn a lot from our parents, the family role patterns have an influence on the adult behavior of the children. There is some sociological evidence, that gender roles (and attitudes towards them) are inherited through family role patterns among others. In this report, I'm examining whether the classical *"woman doing housework, staying home with the children instead of working"* phenomenon might be also influenced by family role patters.  
 
 I use the European Social Survey dataset to examine this phenomenon. Since being a "stay-at-home mom" is influenced by many overlapping factors, I also include some important socio-economic factors, like:  
 
-- age: the phenomenon might be prone to change over time as we experienced radical changes in attitudes towards gender roles during the last few decades, so different generations might be differently affected by these patterns. The "stay-at-home mom" status also changes by age.  
+- age: the phenomenon might be prone to change over time as we have experienced radical changes in attitudes towards gender roles during the last few decades, so different generations might be differently affected by these patterns. The "stay-at-home mom" status also changes by age.  
 - household income: "stay-at-home mom" might be a luxury of the middle-class and above, one breadwinner can't sustain a whole family unless their income reaches a given threshold. Households of different level might also hold different values and general attitudes.  
 - partner: roles and chores are oftentimes allocated in families based on their relative positions. The member earning more (or having the potential to earn more) is more likely to work on the labor market and the other member takes larger share in housework. As I have no data on the income of the partner, I take whether the partner's education level is higher.  
 - values: conservatives and other groups might be more prone to these rather traditional values. I use the religiousness from the database.  
@@ -62,7 +62,7 @@ The sample is supposed to be representative of all persons aged 15 and over, res
 ```{r data_cleaning}
 #reading SPSS file. function from 'foreign' package. 
 #use.value.labels is TRUE by default, it converts the values to factors, so we prefer FALSE
-df1 <- read.spss(file = "~/Documents/CEU/DA2/DA2 project/A3/data/raw/ESS9e03_1.sav", to.data.frame = TRUE , use.value.labels = FALSE)
+df1 <- read.spss(file = "https://github.com/bmbln/DA2/blob/main/A3/data/raw/ESS9e03_1.sav?raw=true", to.data.frame = TRUE , use.value.labels = FALSE)
 
 df <- df1 %>% 
   ##make filtering by values
@@ -109,7 +109,7 @@ df <- df %>%
           age2 = age^2 , 
           age3 = age^3 )
 
-write.csv( df , file = "~/Documents/CEU/DA2/DA2 project/A3/data/cleaned/clean_df.csv " , row.names = F )
+## write.csv( df , file = "~/Documents/CEU/DA2/DA2 project/A3/data/cleaned/clean_df.csv " , row.names = F )
 
 var_names <- c(
   "cntry" = "Country" , 
@@ -134,9 +134,9 @@ var_names <- c(
 ```
 
 The ESS-2018 database contains `r length(df1[[1]])` observations. As we are interested in inheriting household role patterns among women, the dataset was filtered for married women only. For the dependent variable (main activity during the last 7 days) only those respondents were kept that marked paid work or "housework, taking care of the children, etc." - unemployed, student, retired, etc. dropped. For the dependent variable (mother's employment status when respondent was 14 years old), only any form of employment and "not working" were kept.  
-Both the dependent and independent variables are problematic in terms of validity. The main activity variable only accounts for the last 7 days, it is possible that those who marked "housework, taking care of children etc." aren't really stay-at-home mothers. Our suspision raises as the maximum age of married woman doing either paid job or housework in the sample is 90 years - it also raises question about the reliability of the measurement, as this 90 year old married woman should have marked retired. Some stay-at-home mothers might have also marked unemployed. The validity of our independent variable (the employment status of the respondent's mother) is also problematic. The question isn't the same as for the respondent, the "not working" can mean stay-at-home mother status, (temporary) unemployment among others, some stay-at-home mother might be also included in the "employed" group as self-employed.   
+Both the dependent and independent variables are problematic in terms of validity. The main activity variable only accounts for the last 7 days, it is possible that those who marked "housework, taking care of children etc." aren't really stay-at-home mothers. Our suspicion raises as the maximum age of married woman doing either paid job or housework in the sample is 90 years - it also raises question about the reliability of the measurement, as this 90 year old married woman should have marked retired. Some stay-at-home mothers might have also marked unemployed. The validity of our independent variable (the employment status of the respondent's mother) is also problematic. The question isn't the same as for the respondent, the "not working" can mean stay-at-home mother status, (temporary) unemployment among others, some stay-at-home mother might be also included in the "employed" group as self-employed.   
 I also had to deal with missing values that were simply excluded from my dataset. The non-response isn't random, especially for some sensitive variables (e.g. household income), but at this stage of my studies I'm not familiar with imputing methods, so dropping these observations is straightforward for all my variables. It definitely puts some question marks on the external validity of my results.   
-Some variables were further cleaned, filtered and transformed. The sample was narrowed down to the working age population (15-65), the education level simplified into 3 categories (primary, sedondary, tertiary). The binary variables were re-coded into 0 and 1, partner's educational level (higher or lower as binary) calculated. At the end, the variables were assigned more meaningful names.
+Some variables were further cleaned, filtered and transformed. The sample was narrowed down to the working age population (15-65), the education level simplified into 3 categories (primary, secondary, tertiary). The binary variables were re-coded into 0 and 1, partner's educational level (higher or lower as binary) calculated. At the end, the variables were assigned more meaningful names.
 In the final database, we have `r length(df[[1]])` observations and `r length(names(df))` variables.
 
 # Analysis
@@ -315,11 +315,11 @@ In a future research, the above mentioned problems can be partially solved by ap
 
 
 
-```{r desc_plots , fig.align="center" , fig.width=5, fig.height = 3 , out.width="50%" }
+```{r desc_plots , fig.align="center" , fig.width=7, fig.height = 5 , out.width="80%" }
 
 plot_for_loop <- function(df, x_var, y_var , weigth , var_names ) {
   i <- ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]] , weight = .data[[weigth]] )) + 
-    geom_point( aes(size = anweight) ) +
+    geom_point( aes(size = anweight) , alpha = .3 ) +
     geom_smooth( method = "loess" ) +
     labs(
       x = x_var, 
