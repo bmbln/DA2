@@ -1,0 +1,453 @@
+---
+title: "Stay-at-Home mother's daughters"
+subtitle: "Inheriting household role patterns - evidence from Europe"
+author: "Péter ENDES-NAGY"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  pdf_document:
+    extra_dependencies: ["float"]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = FALSE , warning = FALSE , message=FALSE , fig.pos = "!H", out.extra = "")
+options(tinytex.verbose = TRUE)
+
+library(tidyverse)
+library(fixest)
+library(modelsummary)
+library(estimatr)
+library(lspline)
+library(mfx)
+library(foreign)
+
+#setting up base theme for charts
+theme_proj <- function( base_size = 11) {
+  theme(
+    panel.background = element_rect( fill = 'white' ) ,
+    panel.grid.major = element_line( size = 0.1, linetype = 'solid',
+                                     colour = 'azure3') ,
+    panel.grid.minor = element_line( size = 0.1, linetype = 'dotted',
+                                     colour = 'azure4') ,
+    plot.subtitle = element_text( (size = base_size - 2) ) ,
+    legend.position = 'none')
+}
+
+# custom functions for descriptive statistics
+P95 <- function(x){quantile(x,0.95,na.rm=T)}
+P05 <- function(x){quantile(x,0.05,na.rm=T)}
+Range <- function(x){max(x,na.rm=T)-min(x,na.rm=T)}
+```
+
+# Introduction
+
+This is a regression analysis on married woman of Europe in 2018. I'm investigating the effect of having a stay-at-home mom mother on the stay-at-home mom status of their children.    
+We learn a lot from our parents, the family role patterns have an influence on the adult behavior of the children. There is some sociological evidence, that gender roles (and attitudes towards them) are inherited through family role patterns as well. In this report, I'm examining whether the classical "woman doing housework, staying home with the children instead of working" phenomenon might be also influenced by family role patters.  
+
+I use the European Social Survey dataset to examine this phenomenon. Since being a "stay-at-home mom" is influenced by many overlapping factors, I also include some important socio-economic factors, like:  
+
+- age: the phenomenon might be prone to change over time as we experienced radical changes in attitudes towards gender roles during the last few decades, so different generations might be differently affected by these patterns. The "stay-at-home mom" status also changes by age.  
+- household income: "stay-at-home mom" might be a luxury of the middle-class and above, one breadwinner can't sustain a whole family unless their income reaches a given threshold. Households of different level might also hold different values and general attitudes.  
+- partner: roles and chores are oftentimes allocated in families based on their relative positions. The member earning more (or having the potential to earn more) is more likely to work on the labor market and the other member takes larger share in housework. As I have no data on the income of the partner, I take whether the partner's education level is higher.  
+- values: conservatives and other groups might be more prone to these rather traditional values. I use the religiousness from the database.  
+
+A better approach could have been comparing man and woman, but unfortunately the database didn't make it possible as the dependent and independent variables are measured slightly differently and would be even more cumbersome to apply to father-son relations. Also, the share of man indicating housework as their main activity is very low in the dataset. 
+
+# Data 
+I use the latest edition of the European Social Survey (ESS9-2018, ed.3.1), available *[here](https://www.europeansocialsurvey.org/data/download.html?r=9)*. The EES is a large-scale cross-national survey that has been conducted every 2 years as face-to-face interviews in Europe since 2001 (9 editions so far). The survey measures the attitudes, beliefs and behavior patterns of diverse populations in more than thirty European nations. It has almost 200.000 registered users, the 9th edition dataset has been downloaded over 25.000 times as of September 2021 *([source](http://www.europeansocialsurvey.org/docs/data_users/ESS_data_user_stats_sep_2021.pdf))*.  
+The dataset can be downloaded after a simple registration in .dat or .sav formats.  
+The sample is supposed to be representative of all persons aged 15 and over, resident within private households in countries included. Individuals are selected by strict random probability methods at every stage. Several weight values are also provided for various purposes *([more about the use of weights](https://www.europeansocialsurvey.org/docs/methodology/ESS_weighting_data_1_1.pdf))*. More about the sampling and methodology *[here](https://www.europeansocialsurvey.org/methodology/ess_methodology/)*.  
+
+## Cleaning
+
+```{r data_cleaning}
+#reading SPSS file. function from 'foreign' package. 
+#use.value.labels is TRUE by default, it converts the values to factors, so we prefer FALSE
+df1 <- read.spss(file = "~/Documents/CEU/DA2/DA2 project/A3/data/raw/ESS9e03_1.sav", to.data.frame = TRUE , use.value.labels = FALSE)
+
+df <- df1 %>% 
+  ##make filtering by values
+  #+ NA filtered out for religiousness, total income, education level, partner's education level and age
+  filter( gndr == 2 , #woman only
+          maritalb == 1 , #married only
+          mnactic %in% c( 1 , 8 ) , #main activity paid work (1) or housework, looking after children etc. (8)
+          emprm14 %in% 1:3, # mother employed (1:2) or not working (3)
+          agea < 66 , #working age population
+          !is.na(rlgblg) , 
+          !is.na(rlgdgr) , 
+          !is.na(hinctnta) ,  
+          !is.na(edulvlb) ,
+          !is.na(edulvlpb) , 
+          !is.na(agea) ) %>% 
+  ##transform variables and give more meaningful variable names
+  mutate( religious_belong = abs(rlgblg - 2) , #religious 1, not 0
+          main_activity = ifelse( mnactic == 8 , 1 , 0 ) , #main acitvity last 7 days housework (1), paid work (0)
+          mother_empl = ifelse( emprm14 == 3 , 1 , 0 ) , #mother's status at age repondent's age 14: not working (1), employed (0)
+          partner_edu = ifelse( edulvlpb > edulvlb , 1 , 0 ) , #partner's education level higher (1) same or lower (0)
+          edu_lvl = as.factor( 
+            ifelse( edulvlb < 300 , "primary" , 
+                    ifelse( edulvlb < 500 , "secondary" , "tertiary" ) ) ) , #recoding education level
+          edu_primary = ifelse( edu_lvl == "primary" , 1 , 0 ) ,
+          edu_secondary = ifelse( edu_lvl == "secondary" , 1 , 0 ) ,
+          edu_tertiary = ifelse( edu_lvl == "tertiary" , 1 , 0 ) ,
+          religious_lvl = rlgdgr , 
+          age = agea ,
+          household_income_lvl = hinctnta ) %>% 
+  #keep necessary variables only 
+  dplyr::select( cntry , anweight , #analysis weight!
+          main_activity , mother_empl ,
+          religious_belong , religious_lvl ,
+          partner_edu , 
+          edu_lvl , edu_primary , edu_secondary , edu_tertiary ,
+          age ,
+          household_income_lvl )
+
+#additional transformations (after initial inspection of the sample)
+df <- df %>% 
+  dplyr::mutate( religious_very = ifelse( religious_lvl >= 7 , 1 , 0 ),
+          religious_mod = ifelse( religious_lvl < 7 & religious_lvl > 7, 1 , 0 ) , 
+          religious_not = ifelse( religious_lvl <= 3 , 1 , 0 ) , 
+          age2 = age^2 , 
+          age3 = age^3 )
+
+write.csv( df , file = "~/Documents/CEU/DA2/DA2 project/A3/data/cleaned/clean_df.csv " , row.names = F )
+
+var_names <- c(
+  "cntry" = "Country" , 
+  "anweight" = "Analytical weight" , 
+  "main_activity" = "Housework as main activity" ,
+  "mother_empl" = "Mother not working" , 
+  "religious_belong" = "Belongs to religious group" , 
+  "religious_lvl" = "How religious?" , 
+  "partner_edu" = "Partner more highly educated" , 
+  "edu_lvl" = "Level of education" , 
+  "edu_primary" = "Highest level of education: Primary" , 
+  "edu_secondary" = "Highest level of education: Secondary" ,
+  "edu_tertiary" = "Highest level of education: Tertiary" ,
+  "age" = "Age" , 
+  "household_income_lvl" = "Household's income level (1-10)" , 
+  "religious_very" = "Very religious" , 
+  "religious_mod" = "Moderately religious" , 
+  "religious_not" = "Not too religious" , 
+  "age2" = "Age^2" ,
+  "age3" = "Age^3"
+)
+```
+
+The ESS-2018 database contains `r length(df1[[1]])` observations. As we are interested in inheriting household role patterns among women, the dataset was filtered for married women only. For the dependent variable (main activity during the last 7 days) only those respondents were kept that marked paid work or "housework, taking care of the children, etc." - unemployed, student, retired, etc. dropped. For the dependent variable (mother's employment status when respondent was 14 years old), only any form of employment and "not working" were kept.  
+Both the dependent and independent variables are problematic in terms of validity. The main activity variable only accounts for the last 7 days, it is possible that those who marked "housework, taking care of children etc." aren't really stay-at-home mothers. Our suspision raises as the maximum age of married woman doing either paid job or housework in the sample is 90 years - it also raises question about the reliability of the measurement, as this 90 year old married woman should have marked retired. Some stay-at-home mothers might have also marked unemployed. The validity of our independent variable (the employment status of the respondent's mother) is also problematic. The question isn't the same as for the respondent, the "not working" can mean stay-at-home mother status, (temporary) unemployment among others, some stay-at-home mother might be also included in the "employed" group as self-employed.   
+I also had to deal with missing values that were simply excluded from my dataset. The non-response isn't random, especially for some sensitive variables (e.g. household income), but at this stage of my studies I'm not familiar with imputing methods, so dropping these observations is straightforward for all my variables. It definitely puts some question marks on the external validity of my results.   
+Some variables were further cleaned, filtered and transformed. The sample was narrowed down to the working age population (15-65), the education level simplified into 3 categories (primary, sedondary, tertiary). The binary variables were re-coded into 0 and 1, partner's educational level (higher or lower as binary) calculated. At the end, the variables were assigned more meaningful names.
+In the final database, we have `r length(df[[1]])` observations and `r length(names(df))` variables.
+
+# Analysis
+
+## Descriptive statistics
+The clean dataset has `r length(df[1])` observations in total. 
+
+```{r descriptives_binary}
+datasummary( 
+            (`Housework` = main_activity) + (`Mother not working` = mother_empl) + (`Belongs religious group` = religious_belong) + (`Partner more educated` = partner_edu) + (`Highest education: Primary` = edu_primary ) + (`Highest education: Secondary` = edu_secondary ) + (`Highest education: Tertiary` = edu_tertiary )  ~ 
+             Mean + SD ,
+             data = df, 
+             title = 'Descriptive statistics* of binary variables' , 
+             notes = '*without applying analysis weight') %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+```{r descriptives_continous}
+datasummary( 
+           (`Age` = age) + (`How religious` = religious_lvl) + (`Household income level (1-10)` = household_income_lvl) + (`Partner more educated` = partner_edu) + (`Analysis weight` = anweight )   ~ 
+             Mean + SD + Median + Min + Max + Range + P05 + P95 + N  , 
+             data = df,
+             title = 'Descriptive statistics* of continous variables' , 
+             notes = '*without applying analysis weight') %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+The mean of our dependent variable shows that `r round(weighted.mean( df$main_activity , w = df$anweight) * 100 , 2 )`% of married woman in the sample had housework as their main activity. The mother of `r round(weighted.mean( df$mother_empl , w = df$anweight) * 100 , 2 )`% of them didn't work when the respondents were 14 years old.  
+Regarding the confounding variables, plotting the religious belonging and level of religiousness against the dependent variable reveals, that level of religiousness is a better choice and the variable is worth split into 3: very, moderately and not religious for the models.  
+The partner of `r round(weighted.mean( df$partner_edu , w = df$anweight) * 100 , 2 )`% of them had higher level of education, `r round(weighted.mean( df$edu_primary , w = df$anweight) * 100 , 2 )`% of the respondents had only primary, `r round(weighted.mean( df$edu_secondary , w = df$anweight) * 100 , 2 )`% secondary and `r round(weighted.mean( df$edu_tertiary , w = df$anweight) * 100 , 2 )`% tertiary as their highest education degree.  
+The average age of the respondents is `r round(weighted.mean( df$age , w = df$anweight) , 1 )` years. Plotting age and dependent variable suggests that the relationship isn't linear, the non-parametric regression line reaches a local minimum around age of 52, then sharply increases. It calls for an `lspline` in the model. We can also include it as a higher order polynomial.    
+The household income level variable tells us in which income decile the household belongs to (calculated based on total income), the average income decile is `r round(weighted.mean( df$household_income_lvl , w = df$anweight) , 1 )`. The distance between the given values isn't the same, especially around the 1 and 10 values, so it can't be treated as a scale or interval variable. Bearing in mind the bias and looking at the chart (income level and dependent variable), we can include it in the model as an `lspline`, with breaking point at 8.  
+
+## Building the model
+As we are interested in whether household role patterns are inherited, our dependent variable is `main_activity`: housework, looking after children, etc. was the main activity of the respondent (1), or paid work (0). As it is a binary variable and I'm not interested in prediction, a simple LPM can do the job. For prediction, a logit or probit model would be necessary. As the LPM coefficients and the marginal effects in logit and probit are very close to each other, they would be redundant, not even useful for robustness checks. LMP is always heteroskedastic, robust standard error shall be estimated.  
+Our independent variable is the employment status of the respondents mother at the age of 14: (self-)employed (0) or not working (1). A binary variable.  
+The first Model only works with y and x, further models include the confounders.  
+In the second and third models, only age is included to see whether we need a higher order polinomial or a simple and more easy to interpret `lspline(52)` is robust enough. 
+In the 4th model, household income level (with `lspline(8)`), religiousness (2 out of the 3 binary variables, not religious is the reference), level of education (2 out of the 3 binary variables, primary is the reference) and partner's education (higher than respondent) is included as well.  
+
+```{r models_1}
+
+lpm <- lm( main_activity ~ mother_empl , data = df , weights = anweight)
+df$pred_lpm <- predict( lpm )
+
+lpm2 <- lm( main_activity ~ mother_empl + age + age2 + age3  , data = df , weights = anweight )
+df$pred_lpm2 <- predict( lpm2 )
+
+lpm3 <- lm( main_activity ~ mother_empl +  lspline( age, c(52) )  , data = df , weights = anweight )
+df$pred_lpm3 <- predict( lpm3 )
+
+msummary( list( `Model 1` = lpm , `Model 2` = lpm2 ,
+                `Model 3` = lpm3 ) ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries' , 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+Comparing the 2nd and the 3rd Models, the CI's of the independent variables are overlapping, so they probably aren't statistically different. The R2 is slightly lower in the 3rd Model, as it has less variables (but the variables are basically the same). Since the models aren't much different, a more easy to interpret `lspline` is enough. Using age in the model is recommended as it considerably increased the R2 from `r round(summary(lpm)$r.squared ,  4 )` to `r round(summary(lpm2)$r.squared ,  4 )` (we can't interpret R2 for probability models, but it works for ranking the models). 
+
+```{r models_2}
+
+lpm4 <- lm( main_activity ~ mother_empl + 
+              lspline( age, c(52) ) + lspline( household_income_lvl , c(8) ) + partner_edu + edu_secondary + edu_tertiary + religious_very + religious_mod ,
+            data = df , 
+            weights = anweight )
+df$pred_lpm4 <- predict( lpm4 )
+
+msummary( list( `Model 1` = lpm , `Model 4` = lpm4 ) ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+
+```
+
+In Model 1, only the independent variable was included. If a woman's mother wasn't working (probably a stay-at-home mom), it is `r round( coef(lpm)[2]*100 , 2)`% points more likely that she has housework as her main activity (probably a stay-at-home mom). As the confounders were included in Model 4, a stay-at-home mom mother meant only `r round( coef(lpm4)[2]*100 , 2)`% points higher likeliness on average, that the daughter was also a stay-at-home mother (compared to those whose mother worked).  
+
+In Model 4,   
+
+- each additional year means `r round( abs( coef( lpm4 )[ "lspline(age, c(52))1" ] )*100 , 2)`% points lower likeliness of being a stay-at-home mom until the age of 52, then each additional year means `r round( abs( coef( lpm4 )[ "lspline(age, c(52))2" ] )*100 , 2)`% points higher likeliness.  
+- being in a one decile higher income level group under the 8th decile means `r round( abs( coef( lpm4 )[ "lspline(household_income_lvl, c(8))1" ] )*100 , 2)`% points lower likeliness being a stay-at-home mom on average, while above the 8th decile, the likelihood is higher by 
+`r round( abs( coef( lpm4 )[ "lspline(household_income_lvl, c(8))2" ] )*100 , 2)`% points.  
+- if a woman's partner is more highly educated, the likelihood of being a stay-at-home mom is `r round( abs( coef( lpm4 )[ "partner_edu" ] )*100 , 2)`% points higher.  
+- regarding the education level of married woman, those with secondary level education are `r round( abs( coef( lpm4 )[ "edu_secondary" ] )*100 , 2)`% points less likely to become a stay-at-home mom compared to primary education level woman. The tertiary education means `r round( abs( coef( lpm4 )[ "edu_tertiary" ] )*100 , 2)`% point less likelihood.  
+- comared to non religious married woman, those who are moderately religious `r round( abs( coef( lpm4 )[ "religious_mod" ] )*100 , 2)`% points more likely to be a stay-at home mom, while the very reglious group is `r round( abs( coef( lpm4 )[ "religious_very" ] )*100 , 2)`% points more likely. 
+
+## Robustness check and external validity
+There are 2 ways of robustness check, 1) running the models for different countries and see the consistency of the results on each countries 2) running the same models on earlier editions of ESS. The latter could reinforce the external validity as we see a robust (or not robust) result across samples and years. The samples are more important, the underlying causes of these associations aren't very likely to change dramatically over a one or two decades. 
+
+In this report, I choose the first option and checked the robustness of having a stay-at-home mom mother in each country.
+
+```{r rob_1}
+# list of countries 
+countries <- unique(df$cntry)
+#empty list for the models
+lpm4_per_cntry <- list()
+#empty dataframe for the loop
+df_temp <- data.frame()
+
+for (i in countries) {
+  df_temp <- df %>% 
+    dplyr::filter(cntry == i ) #filter for the given country
+  
+  #run the model for the given country and save it into the list of models
+  lpm4_per_cntry[[ i ]] <- lm( main_activity ~ mother_empl + 
+                  lspline( age, c(52) ) + lspline( household_income_lvl , c(8) ) + partner_edu + edu_secondary + edu_tertiary + religious_very + religious_mod ,
+                data = df_temp , 
+                weights = anweight )
+}
+```
+
+It turns out that the coefficients are very different per countries (see in Annex), they aren't actually dignificant nor at 5% nor at 1% in most countries. What is consistently significant at 1% in most countries is the age below 52, the household income level below the 8th decile and oftentimes the partner's highest education level. The model should be revised in case of running them on countries, because the age and income level splines were calculated based on the European-level data.   
+
+A better strategy to robustness check might be including countries in the model as binary variables and see how it changes. We can anyways argue for its inclusion as countries can represent different cultural features of given societies.  
+
+```{r rob_2}
+lpm5 <- lm( main_activity ~ mother_empl + 
+              lspline( age, c(52) ) + lspline( household_income_lvl , c(8) ) + partner_edu + edu_secondary + edu_tertiary + religious_very + religious_mod + as.factor(cntry),
+            data = df , 
+            weights = anweight )
+df$pred_lpm5 <- predict( lpm5 )
+
+msummary( list( `Model 4` = lpm4 , `Model 5` = lpm5 ) ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = 'as.factor(cntry)*' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries', 
+         notes = 'with the use of analysis weight. Country cariables omitted from the table (Model 5)'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+
+```
+The CI's are overlapping for almost every variable, so the results of Model 4 can be considered relatively robust.  
+
+# Conclusion
+
+In this report, I investigated whether family pattern are inherited in terms of housework roles in families. More precisely, if having had a "stay-at-home mom" mother during teenager ages might influence if a woman becomes a "stay-at-home mom" herself.  
+
+Based on my results, it does, at least on the European sample. But it's importance decreases as more confounders are included; the age (generational or life phase differences), the household income (therefore class), and the partner's relative situation (more educated, therefore probably earning more) seems more influential.  
+
+My analysis has some weaknesses with consequences on the external validity of my results:  
+
+- missing values were simply dropped. Those who refused to give an answer are probably different than those kept in the dataset, therefore the patterns observed in my sample are different in the general population.  
+- the dataset is about one given year and European countries only. The patterns might change over time (not in 1-2 decades though), and they might work differently in other continents and cultures.  
+- the measurement of being a "stay-at-home mom" (both in case of daughters and mothers) is problematic, the validity of the variable itself is questionable.  
+
+In a future research, the above mentioned problems can be partially solved by applying a wide robustness check across different editions of ESS (9 editions in total). 
+
+# Annex: 
+
+
+
+```{r desc_plots , fig.align="center" , fig.width=5, fig.height = 3 , out.width="50%" }
+
+plot_for_loop <- function(df, x_var, y_var , weigth , var_names ) {
+  i <- ggplot(df, aes(x = .data[[x_var]], y = .data[[y_var]] , weight = .data[[weigth]] )) + 
+    geom_point( aes(size = anweight) ) +
+    geom_smooth( method = "loess" ) +
+    labs(
+      x = x_var, 
+      y = y_var,
+      title = paste0( "Figure var.", i , ": " , y_var , " and " , x_var ) ) +
+    theme_proj()
+  return(i)
+}
+
+desc_plots <- list()
+for ( i in 4:length(df) ) {
+  j <- names(df)[i]
+  desc_plots[[j]] <- plot_for_loop( df , j , "main_activity" , "anweight" , "var_names")
+}
+
+# education_lvl excluded as it is a factor. education_primary and constructed variables also excluded. 
+desc_vars <- names(df)[c(4,5,6,12,13)]
+desc_plots <- desc_plots[desc_vars]
+desc_plots
+```
+
+
+
+```{r Model4_per_cntry_1}
+msummary( lpm4_per_cntry[1:5] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+```{r Model4_per_cntry_2}
+msummary( lpm4_per_cntry[6:10] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+```{r Model4_per_cntry_3}
+msummary( lpm4_per_cntry[11:15] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+
+```{r Model4_per_cntry_4}
+msummary( lpm4_per_cntry[16:20] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+```{r Model4_per_cntry_5}
+msummary( lpm4_per_cntry[20:25] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+```{r Model4_per_cntry_6}
+msummary( lpm4_per_cntry[26:29] ,
+         fmt="%.4f",
+         gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|Num.Obs.',
+         coef_omit = '(Intercept)' ,
+         stars=c('*' = .05, '**' = .01) ,
+         coef_rename = append(var_names , c(
+           "lspline(age, c(52))1" = "Age below 52" , 
+           "lspline(age, c(52))2" = "Age above 52" , 
+           "lspline(household_income_lvl, c(8))1" = "Household income level < 8/10" ,
+           "lspline(household_income_lvl, c(8))2" = "Household income level: high, 8 and above"
+         ) , length(var_names) ) ,
+         title = 'Probability of being a stay-home-mom : Model summaries per countries', 
+         notes = 'with the use of analysis weight'
+) %>% 
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+
+
